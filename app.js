@@ -13,6 +13,8 @@ const adminRoutes = require("./routes/adminRoutes");
 const teamRoutes = require("./routes/teamRoutes");
 const playerRoutes = require("./routes/playerRoutes");
 const userRoutes = require("./routes/userRoutes");
+const userTeamRoutes = require("./routes/userTeamRoutes");
+const userPlayerRoutes = require("./routes/userPlayerRoutes");
 
 const app = express();
 
@@ -50,6 +52,8 @@ app.get("/", (req, res) => {
 app.use("/api/health", healthRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
+app.use("/api/user/teams", userTeamRoutes);
+app.use("/api/user/players", userPlayerRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/teams", teamRoutes);
 app.use("/api/admin/players", playerRoutes);

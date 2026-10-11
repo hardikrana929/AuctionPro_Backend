@@ -47,3 +47,12 @@ Set frontend `.env` to `VITE_API_URL=http://localhost:5000/api`.
 - User login: `/login` (alias `/user/login` redirects there)
 - User dashboard: `/dashboard`
 - Admin login remains `/admin/login`.
+
+
+## Assigned-user management access
+
+- Admin team/player endpoints remain `/api/admin/teams` and `/api/admin/players`; admins can manage records across all auctions.
+- Assigned users manage only their login-selected auction through `/api/user/teams` and `/api/user/players`.
+- The server scopes list/create requests to the auction ID in the verified login token and rejects cross-auction record IDs on read/update/delete.
+- The frontend stores the selected auction ID in session storage for display only; the backend does not trust that value for authorization.
+- User dashboard includes shortcuts to `/manage/teams` and `/manage/players`.
