@@ -10,6 +10,15 @@ const playerSchema = new mongoose.Schema(
             minlength: 2,
             maxlength: 100,
         },
+        // Structured names are populated by public registration. `name` remains
+        // the canonical display name for compatibility with existing auction UI.
+        firstName: { type: String, trim: true, maxlength: 50, default: "" },
+        lastName: { type: String, trim: true, maxlength: 50, default: "" },
+        birthdate: { type: Date, default: null },
+        contactNo: { type: String, trim: true, maxlength: 20, default: "" },
+        whatsappNo: { type: String, trim: true, maxlength: 20, default: "" },
+        villageTown: { type: String, trim: true, maxlength: 100, default: "" },
+        registrationSource: { type: String, enum: ["manual", "public-form"], default: "manual" },
         role: {
             type: String,
             required: [true, "Player role is required"],

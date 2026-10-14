@@ -320,6 +320,20 @@ exports.assignUserToAuction = async (req, res, next) => {
             });
         }
 
+        // Each auction may be assigned to only one user at a time.
+        const existingAssignee = await User.findOne({
+            _id: { $ne: user._id },
+            role: "user",
+            assignedAuctionIds: auction.auctionId,
+        }).select("username");
+
+        if (existingAssignee) {
+            return res.status(409).json({
+                success: false,
+                message: `This auction is already assigned to ${existingAssignee.username}. Remove that assignment first.`,
+            });
+        }
+
         if (user.assignedAuctionIds.includes(auction.auctionId)) {
             return res.status(409).json({
                 success: false,
@@ -394,6 +408,37 @@ exports.removeUserFromAuction = async (req, res, next) => {
         return res.status(200).json({
             success: true,
             message: "User removed from auction successfully",
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+
+/**
+ * DELETE /api/admin/users/:userId
+ * Delete a user account. Admin accounts cannot be deleted through this endpoint.
+ */
+exports.deleteUser = async (req, res, next) => {
+    try {
+        const { userId } = req.params;
+
+        if (!mongoose.isValidObjectId(userId)) {
+            return res.status(400).json({ success: false, message: "Invalid user ID" });
+        }
+
+        const user = await User.findOne({ _id: userId, role: "user" });
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User account not found" });
+        }
+
+        await User.deleteOne({ _id: user._id, role: "user" });
+
+        return res.status(200).json({
+            success: true,
+            message: `User "${user.username}" was deleted successfully.`,
+            deletedUserId: user._id,
         });
     } catch (error) {
         next(error);

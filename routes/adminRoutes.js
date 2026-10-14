@@ -5,6 +5,7 @@ const {
     getAuctionById,
     createUser,
     getUsers,
+    deleteUser,
     assignUserToAuction,
     removeUserFromAuction,
 } = require("../controllers/adminController");
@@ -24,6 +25,7 @@ router.get("/auctions/:auctionId", getAuctionById);
 // User management
 router.post("/users", createUser);
 router.get("/users", getUsers);
+router.delete("/users/:userId", deleteUser);
 
 // Assign or remove a user from an auction
 router.post(
