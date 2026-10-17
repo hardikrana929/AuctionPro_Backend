@@ -7,7 +7,7 @@ const User = require("../models/User");
 
 // Generate an Auction ID such as AUC-7F2A91BC40
 function generateAuctionId() {
-    return `AUC-${crypto.randomBytes(5).toString("hex").toUpperCase()} `;
+    return `AUC-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
 }
 
 // POST /api/admin/auctions
@@ -443,4 +443,91 @@ exports.deleteUser = async (req, res, next) => {
     } catch (error) {
         next(error);
     }
+};
+
+// PATCH /api/admin/auctions/:auctionId — update editable settings/status, never the ID.
+exports.updateAuction = async (req, res, next) => {
+    try {
+        const auctionId = String(req.params.auctionId || "").trim().toUpperCase();
+        const auction = await Auction.findOne({ auctionId });
+        if (!auction) return res.status(404).json({ success: false, message: "Auction not found" });
+
+        const editableFields = ["name", "description", "auctionDate", "startingBudget", "minimumBid", "bidIncrement", "maxTeams", "maxPlayersPerTeam"];
+        for (const field of editableFields) {
+            if (req.body[field] !== undefined) {
+                if (["startingBudget", "minimumBid", "bidIncrement", "maxTeams", "maxPlayersPerTeam"].includes(field)) {
+                    const value = Number(req.body[field]);
+                    if (!Number.isFinite(value) || value <= 0 || (["maxTeams", "maxPlayersPerTeam"].includes(field) && !Number.isInteger(value))) {
+                        return res.status(400).json({ success: false, message: `${field} must be a valid positive ${["maxTeams", "maxPlayersPerTeam"].includes(field) ? "integer" : "number"}.` });
+                    }
+                    auction[field] = value;
+                } else if (field === "name") {
+                    const value = String(req.body.name).trim();
+                    if (value.length < 3 || value.length > 100) return res.status(400).json({ success: false, message: "Auction name must be 3–100 characters." });
+                    auction.name = value;
+                } else if (field === "description") {
+                    auction.description = String(req.body.description || "").trim();
+                } else if (field === "auctionDate") {
+                    const parsed = req.body.auctionDate ? new Date(req.body.auctionDate) : null;
+                    if (parsed && Number.isNaN(parsed.getTime())) return res.status(400).json({ success: false, message: "Invalid auction date." });
+                    auction.auctionDate = parsed;
+                }
+            }
+        }
+
+        if (req.body.status !== undefined) {
+            const allowedStatuses = ["draft", "active", "paused", "completed", "archived"];
+            if (!allowedStatuses.includes(req.body.status)) return res.status(400).json({ success: false, message: "Invalid auction status." });
+            if (req.body.status === "active") {
+                const teamCount = await require("../models/Team").countDocuments({ auctionId });
+                if (teamCount < 2) return res.status(409).json({ success: false, message: "Add at least two teams before activating this auction." });
+            }
+            auction.status = req.body.status;
+            const Session = require("../models/AuctionSession");
+            const session = await Session.findOne({ auctionId });
+            if (session && ["completed", "archived"].includes(req.body.status)) {
+                session.status = "completed";
+                session.completedAt = new Date();
+                await session.save();
+            } else if (session && req.body.status === "paused") {
+                session.status = "paused";
+                await session.save();
+            } else if (session && req.body.status === "active" && session.status !== "completed") {
+                session.status = "live";
+                await session.save();
+            }
+        }
+
+        if (auction.minimumBid > auction.startingBudget) return res.status(400).json({ success: false, message: "Minimum bid cannot exceed starting budget." });
+        await auction.save();
+        return res.json({ success: true, message: "Auction updated successfully", auction });
+    } catch (error) { next(error); }
+};
+
+// DELETE /api/admin/auctions/:auctionId — preserve history once bidding has started.
+exports.deleteAuction = async (req, res, next) => {
+    try {
+        const auctionId = String(req.params.auctionId || "").trim().toUpperCase();
+        const auction = await Auction.findOne({ auctionId });
+        if (!auction) return res.status(404).json({ success: false, message: "Auction not found" });
+        const Bid = require("../models/Bid");
+        if (await Bid.exists({ auctionId })) return res.status(409).json({ success: false, message: "This auction has bid history and cannot be deleted. Mark it completed or archived instead." });
+        const Player = require("../models/Player");
+        const Team = require("../models/Team");
+        const PlayerRegistrationLink = require("../models/PlayerRegistrationLink");
+        const AuctionSession = require("../models/AuctionSession");
+        const Feedback = require("../models/Feedback");
+        const Notification = require("../models/Notification");
+        await Promise.all([
+            Player.deleteMany({ auctionId }),
+            Team.deleteMany({ auctionId }),
+            PlayerRegistrationLink.deleteMany({ auctionId }),
+            AuctionSession.deleteMany({ auctionId }),
+            Feedback.deleteMany({ auctionId }),
+            Notification.deleteMany({ auctionId }),
+            User.updateMany({ assignedAuctionIds: auctionId }, { $pull: { assignedAuctionIds: auctionId } }),
+        ]);
+        await auction.deleteOne();
+        return res.json({ success: true, message: "Auction and its unbid setup data were deleted." });
+    } catch (error) { next(error); }
 };

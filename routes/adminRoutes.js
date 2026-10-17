@@ -3,6 +3,8 @@ const {
     createAuction,
     getAuctions,
     getAuctionById,
+    updateAuction,
+    deleteAuction,
     createUser,
     getUsers,
     deleteUser,
@@ -21,6 +23,8 @@ router.use(protectRoute, adminOnly);
 router.post("/auctions", createAuction);
 router.get("/auctions", getAuctions);
 router.get("/auctions/:auctionId", getAuctionById);
+router.patch("/auctions/:auctionId", updateAuction);
+router.delete("/auctions/:auctionId", deleteAuction);
 
 // User management
 router.post("/users", createUser);

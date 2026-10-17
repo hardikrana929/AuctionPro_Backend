@@ -16,6 +16,9 @@ const userRoutes = require("./routes/userRoutes");
 const userTeamRoutes = require("./routes/userTeamRoutes");
 const userPlayerRoutes = require("./routes/userPlayerRoutes");
 const playerRegistrationRoutes = require("./routes/playerRegistrationRoutes");
+const auctionControlRoutes = require("./routes/auctionControlRoutes");
+const feedbackRoutes = require("./routes/feedbackRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
 
 const app = express();
 
@@ -36,7 +39,7 @@ app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 200,
+  limit: 1500,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -56,6 +59,9 @@ app.use("/api/user", userRoutes);
 app.use("/api/user/teams", userTeamRoutes);
 app.use("/api/user/players", userPlayerRoutes);
 app.use("/api/player-registration", playerRegistrationRoutes);
+app.use("/api/auction-control", auctionControlRoutes);
+app.use("/api/feedback", feedbackRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/teams", teamRoutes);
 app.use("/api/admin/players", playerRoutes);
