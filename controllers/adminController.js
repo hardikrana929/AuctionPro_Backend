@@ -147,6 +147,7 @@ exports.getAuctions = async (req, res, next) => {
     try {
         const auctions = await Auction.find()
             .populate("createdBy", "username")
+            .populate("assignedUserId", "username")
             .sort({ createdAt: -1 })
             .lean();
 
@@ -284,134 +285,54 @@ exports.getUsers = async (req, res, next) => {
 // Assign a user to an auction
 exports.assignUserToAuction = async (req, res, next) => {
     try {
-        const auctionId = req.params.auctionId.trim().toUpperCase();
+        const auctionId = String(req.params.auctionId || "").trim().toUpperCase();
         const { userId } = req.params;
+        if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ success: false, message: "Invalid user ID" });
 
-        if (!mongoose.isValidObjectId(userId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid user ID",
-            });
-        }
+        const user = await User.findById(userId);
+        if (!user || user.role !== "user") return res.status(404).json({ success: false, message: "Assigned Admin account not found" });
+        if (!user.isActive) return res.status(400).json({ success: false, message: "Cannot assign an inactive account" });
 
-        const [auction, user] = await Promise.all([
-            Auction.findOne({ auctionId }),
-            User.findById(userId),
-        ]);
-
+        // Atomic compare-and-set prevents two simultaneous requests assigning the same auction twice.
+        const auction = await Auction.findOneAndUpdate(
+            { auctionId, $or: [{ assignedUserId: null }, { assignedUserId: { $exists: false } }, { assignedUserId: user._id }] },
+            { $set: { assignedUserId: user._id } },
+            { new: true }
+        );
         if (!auction) {
-            return res.status(404).json({
-                success: false,
-                message: "Auction not found",
-            });
+            const existing = await Auction.findOne({ auctionId }).populate("assignedUserId", "username");
+            if (!existing) return res.status(404).json({ success: false, message: "Auction not found" });
+            return res.status(409).json({ success: false, message: `This auction is already assigned${existing.assignedUserId?.username ? ` to ${existing.assignedUserId.username}` : " to another account"}. Remove that assignment first.` });
         }
 
-        if (!user || user.role !== "user") {
-            return res.status(404).json({
-                success: false,
-                message: "User account not found",
-            });
+        // Keep legacy assignedAuctionIds in sync while older routes still consume it.
+        await User.updateMany({ assignedAuctionIds: auction.auctionId, _id: { $ne: user._id } }, { $pull: { assignedAuctionIds: auction.auctionId } });
+        if (!(user.assignedAuctionIds || []).some(id => String(id).trim().toUpperCase() === auction.auctionId)) {
+            user.assignedAuctionIds = [...(user.assignedAuctionIds || []), auction.auctionId];
+            await user.save();
         }
-
-        if (!user.isActive) {
-            return res.status(400).json({
-                success: false,
-                message: "Cannot assign an inactive user",
-            });
-        }
-
-        // Each auction may be assigned to only one user at a time.
-        const existingAssignee = await User.findOne({
-            _id: { $ne: user._id },
-            role: "user",
-            assignedAuctionIds: auction.auctionId,
-        }).select("username");
-
-        if (existingAssignee) {
-            return res.status(409).json({
-                success: false,
-                message: `This auction is already assigned to ${existingAssignee.username}. Remove that assignment first.`,
-            });
-        }
-
-        if (user.assignedAuctionIds.includes(auction.auctionId)) {
-            return res.status(409).json({
-                success: false,
-                message: "User is already assigned to this auction",
-            });
-        }
-
-        user.assignedAuctionIds.push(auction.auctionId);
-        await user.save();
-
-        return res.status(200).json({
-            success: true,
-            message: "User assigned to auction successfully",
-            assignment: {
-                userId: user._id,
-                username: user.username,
-                auctionId: auction.auctionId,
-                auctionName: auction.name,
-            },
-        });
-    } catch (error) {
-        next(error);
-    }
+        return res.status(200).json({ success: true, message: "Auction assigned successfully", assignment: { userId: user._id, username: user.username, auctionId: auction.auctionId, auctionName: auction.name } });
+    } catch (error) { next(error); }
 };
 
 // DELETE /api/admin/auctions/:auctionId/assign/:userId
 // Remove a user from an auction
 exports.removeUserFromAuction = async (req, res, next) => {
     try {
-        const auctionId = req.params.auctionId.trim().toUpperCase();
+        const auctionId = String(req.params.auctionId || "").trim().toUpperCase();
         const { userId } = req.params;
-
-        if (!mongoose.isValidObjectId(userId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid user ID",
-            });
+        if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ success: false, message: "Invalid user ID" });
+        const auction = await Auction.findOne({ auctionId });
+        if (!auction) return res.status(404).json({ success: false, message: "Auction not found" });
+        if (String(auction.assignedUserId || "") === String(userId)) auction.assignedUserId = null;
+        await auction.save();
+        const user = await User.findById(userId);
+        if (user) {
+            user.assignedAuctionIds = (user.assignedAuctionIds || []).filter(id => String(id).trim().toUpperCase() !== auctionId);
+            await user.save();
         }
-
-        const [auction, user] = await Promise.all([
-            Auction.findOne({ auctionId }),
-            User.findById(userId),
-        ]);
-
-        if (!auction) {
-            return res.status(404).json({
-                success: false,
-                message: "Auction not found",
-            });
-        }
-
-        if (!user || user.role !== "user") {
-            return res.status(404).json({
-                success: false,
-                message: "User account not found",
-            });
-        }
-
-        if (!user.assignedAuctionIds.includes(auction.auctionId)) {
-            return res.status(404).json({
-                success: false,
-                message: "User is not assigned to this auction",
-            });
-        }
-
-        user.assignedAuctionIds = user.assignedAuctionIds.filter(
-            (id) => id !== auction.auctionId
-        );
-
-        await user.save();
-
-        return res.status(200).json({
-            success: true,
-            message: "User removed from auction successfully",
-        });
-    } catch (error) {
-        next(error);
-    }
+        return res.status(200).json({ success: true, message: "Auction assignment removed successfully" });
+    } catch (error) { next(error); }
 };
 
 

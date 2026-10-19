@@ -33,6 +33,14 @@ const auctionSchema = new mongoose.Schema(
             required: true,
         },
 
+        // One auction can have at most one assigned Admin account.
+        assignedUserId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+            index: true,
+        },
+
         auctionDate: {
             type: Date,
             default: null,
