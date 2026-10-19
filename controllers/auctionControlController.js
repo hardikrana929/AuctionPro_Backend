@@ -64,7 +64,6 @@ exports.startAuction = async (req, res, next) => {
   try {
     const auctionId = normalizeId(req.params.auctionId);
     if (!ensureAuctionPermission(req, auctionId)) return res.status(403).json({ success: false, message: "Auction access denied." });
-    if (req.user.role !== "admin") return res.status(403).json({ success: false, message: "Only an admin can start or stop live bidding." });
     const auction = await Auction.findOne({ auctionId });
     if (!auction) return res.status(404).json({ success: false, message: "Auction not found." });
     if (["completed", "archived"].includes(auction.status)) return res.status(409).json({ success: false, message: "This auction is closed." });
@@ -85,8 +84,8 @@ exports.startAuction = async (req, res, next) => {
 
 exports.pauseAuction = async (req, res, next) => {
   try {
-    if (req.user.role !== "admin") return res.status(403).json({ success: false, message: "Only an admin can pause bidding." });
     const auctionId = normalizeId(req.params.auctionId);
+    if (!ensureAuctionPermission(req, auctionId)) return res.status(403).json({ success: false, message: "Auction access denied." });
     const session = await AuctionSession.findOne({ auctionId });
     if (!session || session.status !== "live") return res.status(409).json({ success: false, message: "Auction is not currently live." });
     session.status = "paused";
@@ -103,7 +102,7 @@ exports.pauseAuction = async (req, res, next) => {
 exports.selectNextPlayer = async (req, res, next) => {
   try {
     const auctionId = normalizeId(req.params.auctionId);
-    if (req.user.role !== "admin") return res.status(403).json({ success: false, message: "Only an admin can select the next player." });
+    if (!ensureAuctionPermission(req, auctionId)) return res.status(403).json({ success: false, message: "Auction access denied." });
     const session = await getSession(auctionId);
     if (session.status !== "live") return res.status(409).json({ success: false, message: "Start the auction before selecting players." });
     if (session.currentPlayerId) return res.status(409).json({ success: false, message: "Complete the current player as sold or unsold first." });
@@ -131,7 +130,7 @@ exports.placeBid = async (req, res, next) => {
   try {
     const auctionId = normalizeId(req.params.auctionId);
     if (!ensureAuctionPermission(req, auctionId)) return res.status(403).json({ success: false, message: "Auction access denied." });
-    if (req.user.role !== "user") return res.status(403).json({ success: false, message: "Place bids from an assigned auction user account." });
+    if (!['admin', 'user'].includes(req.user.role)) return res.status(403).json({ success: false, message: "Your role cannot place bids." });
     const { teamId, amount } = req.body;
     if (!mongoose.isValidObjectId(teamId)) return res.status(400).json({ success: false, message: "Select a valid team." });
     if (!Number.isSafeInteger(Number(amount)) || Number(amount) < 1) return res.status(400).json({ success: false, message: "Bid must be a positive whole number." });
@@ -175,7 +174,7 @@ exports.placeBid = async (req, res, next) => {
 async function completeCurrent(req, res, next, sold) {
   try {
     const auctionId = normalizeId(req.params.auctionId);
-    if (req.user.role !== "admin") return res.status(403).json({ success: false, message: "Only an admin can complete a player." });
+    if (!ensureAuctionPermission(req, auctionId)) return res.status(403).json({ success: false, message: "Auction access denied." });
     const session = await AuctionSession.findOne({ auctionId });
     if (!session?.currentPlayerId || session.status !== "live") return res.status(409).json({ success: false, message: "There is no active player to complete." });
     const player = await Player.findOne({ _id: session.currentPlayerId, auctionId, status: "available" });
