@@ -247,6 +247,47 @@ describe("site OTP", () => {
     assert.equal(inbox.length, 1);
   });
 
+  test("21. Resend (HTTPS) is used when RESEND_API_KEY is set - no SMTP involved", async () => {
+    const calls = [];
+    const mock = http.createServer((req, res) => {
+      let body = ""; req.on("data", (c) => (body += c));
+      req.on("end", () => { calls.push({ auth: req.headers.authorization, body: JSON.parse(body) }); res.setHeader("Content-Type", "application/json"); res.end('{"id":"abc"}'); });
+    });
+    await new Promise((r) => mock.listen(0, "127.0.0.1", r));
+    setEnv({ RESEND_API_KEY: "re_test_key", RESEND_API_URL: `http://127.0.0.1:${mock.address().port}/emails`, SMTP_PORT: "1" });
+    await s.close(); s = await freshServer();
+    const r = await s.call("POST", "/api/site-otp/send", {});
+    await new Promise((x) => mock.close(x));
+    delete process.env.RESEND_API_KEY; delete process.env.RESEND_API_URL;
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].auth, "Bearer re_test_key");
+    assert.deepEqual(calls[0].body.to, [OTP_EMAIL.toLowerCase()]);
+    assert.match(calls[0].body.text, /\b\d{6}\b/);
+    assert.equal(inbox.length, 0, "SMTP must not be used");
+  });
+
+  test("22. Resend API rejection gives 503 with a readable reason code and allows retry", async () => {
+    const mock = http.createServer((req, res) => { req.resume(); req.on("end", () => { res.statusCode = 403; res.end('{"message":"domain not verified"}'); }); });
+    await new Promise((r) => mock.listen(0, "127.0.0.1", r));
+    setEnv({ RESEND_API_KEY: "re_bad", RESEND_API_URL: `http://127.0.0.1:${mock.address().port}/emails` });
+    await s.close(); s = await freshServer();
+    const r = await s.call("POST", "/api/site-otp/send", {});
+    await new Promise((x) => mock.close(x));
+    delete process.env.RESEND_API_KEY; delete process.env.RESEND_API_URL;
+    assert.equal(r.status, 503);
+    assert.equal(r.body.reason, "RESEND_403");
+    assert.equal((await s.call("POST", "/api/site-otp/send", {})).status, 200); // falls back to SMTP, no cooldown lock
+  });
+
+  test("23. SMTP failure exposes a reason code for debugging", async () => {
+    setEnv({ SMTP_PORT: "1" });
+    await s.close(); s = await freshServer();
+    const r = await s.call("POST", "/api/site-otp/send", {});
+    assert.equal(r.status, 503);
+    assert.ok(r.body.reason, JSON.stringify(r.body));
+  });
+
   test("19. health + OTP routes are reachable without a site token", async () => {
     assert.notEqual((await s.call("GET", "/api/health")).status, 403);
   });

@@ -32,6 +32,33 @@ function getTransport() {
   });
 }
 
+// Render (and some other hosts) block outbound SMTP ports. Resend works over HTTPS, so it is used when
+// RESEND_API_KEY is set; otherwise we fall back to SMTP (fine for local development).
+async function deliver({ to, subject, text, html }) {
+  if (process.env.RESEND_API_KEY) {
+    const response = await fetch(process.env.RESEND_API_URL || "https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: process.env.RESEND_FROM || "AuctionPro Security <onboarding@resend.dev>",
+        to: [to],
+        subject,
+        text,
+        html,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      const err = new Error(`Resend API ${response.status}: ${detail.slice(0, 300)}`);
+      err.code = `RESEND_${response.status}`;
+      throw err;
+    }
+    return;
+  }
+  await getTransport().sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER, to, subject, text, html });
+}
+
 exports.sendOtp = async (req, res) => {
   const email = getSiteOtpEmail();
   const now = Date.now();
@@ -53,8 +80,7 @@ exports.sendOtp = async (req, res) => {
   otpStore.set(email, { digest: hashOtp(salt, otp), salt, expiresAt: now + OTP_TTL_MS, sentAt: now, attempts: 0, locked: false });
 
   try {
-    await getTransport().sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    await deliver({
       to: email,
       subject: "Your AuctionPro verification code",
       text: `Your AuctionPro website verification code is ${otp}. It expires in 5 minutes. If you did not request this code, you can ignore this email.`,
@@ -70,6 +96,8 @@ exports.sendOtp = async (req, res) => {
         error.code === "SMTP_NOT_CONFIGURED"
           ? "Email delivery is not configured on the server."
           : "Could not send the verification email. Please try again in a moment.",
+      // Safe diagnostic (e.g. ETIMEDOUT, EAUTH, RESEND_403) - visible in the browser's Network tab.
+      reason: error.code || error.name || "UNKNOWN",
     });
   }
 
