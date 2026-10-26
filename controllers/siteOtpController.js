@@ -1,40 +1,58 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
+const { getSiteOtpEmail, maskEmail, OTP_TTL_MS, RESEND_MS, MAX_ATTEMPTS, sessionMinutes } = require("../config/siteOtp");
 
 // For multi-instance production deployments, move OTP records to Redis or MongoDB.
 const otpStore = new Map();
-const attemptsStore = new Map();
-const OTP_TTL_MS = 5 * 60 * 1000;
-const RESEND_MS = 60 * 1000;
-const MAX_ATTEMPTS = 5;
-const destination = () => process.env.SITE_OTP_EMAIL || "hstudy.project@gmail.com";
+
+const hashOtp = (salt, otp) => crypto.createHash("sha256").update(`${salt}:${otp}`).digest("hex");
 
 function getTransport() {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+  const { SMTP_HOST, SMTP_USER, SMTP_PASS } = process.env;
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
     const err = new Error("Email delivery is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS and SMTP_FROM on the backend.");
-    err.statusCode = 503; throw err;
+    err.code = "SMTP_NOT_CONFIGURED";
+    throw err;
   }
+  const port = Number(process.env.SMTP_PORT || 465);
+  const secure = process.env.SMTP_SECURE !== undefined ? String(process.env.SMTP_SECURE) === "true" : port === 465;
+  // Google shows app passwords as "abcd efgh ijkl mnop" - the spaces are not part of the password.
+  const pass = /gmail|google/i.test(SMTP_HOST) ? SMTP_PASS.replace(/\s+/g, "") : SMTP_PASS;
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 465),
-    secure: String(process.env.SMTP_SECURE || "true") === "true",
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    host: SMTP_HOST,
+    port,
+    secure,
+    auth: { user: SMTP_USER, pass },
+    // Fail fast so the browser gets a real error instead of hanging until its own timeout
+    // (some hosts silently block outbound SMTP ports).
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
 }
 
-exports.sendOtp = async (req, res, next) => {
+exports.sendOtp = async (req, res) => {
+  const email = getSiteOtpEmail();
+  const now = Date.now();
+  const previous = otpStore.get(email);
+
+  if (previous && now - previous.sentAt < RESEND_MS) {
+    const retryAfterSeconds = Math.ceil((RESEND_MS - (now - previous.sentAt)) / 1000);
+    res.set("Retry-After", String(retryAfterSeconds));
+    return res.status(429).json({
+      success: false,
+      message: `Please wait ${retryAfterSeconds} seconds before requesting another OTP.`,
+      retryAfterSeconds,
+    });
+  }
+
+  const otp = String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+  const salt = crypto.randomBytes(16).toString("hex");
+  // Reserve the slot BEFORE the (slow) mail call so two simultaneous requests cannot both send.
+  otpStore.set(email, { digest: hashOtp(salt, otp), salt, expiresAt: now + OTP_TTL_MS, sentAt: now, attempts: 0, locked: false });
+
   try {
-    const email = destination().toLowerCase();
-    const now = Date.now();
-    const previous = otpStore.get(email);
-    if (previous && now - previous.sentAt < RESEND_MS) {
-      return res.status(429).json({ message: "Please wait 60 seconds before requesting another OTP." });
-    }
-    const otp = String(crypto.randomInt(0, 1000000)).padStart(6, "0");
-    const salt = crypto.randomBytes(16).toString("hex");
-    const digest = crypto.createHash("sha256").update(`${salt}:${otp}`).digest("hex");
-    // Send first; only activate the code/cooldown after SMTP confirms acceptance.
     await getTransport().sendMail({
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: email,
@@ -42,31 +60,63 @@ exports.sendOtp = async (req, res, next) => {
       text: `Your AuctionPro website verification code is ${otp}. It expires in 5 minutes. If you did not request this code, you can ignore this email.`,
       html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px;color:#172033"><h2>AuctionPro verification</h2><p>Enter this code to access AuctionPro:</p><div style="font-size:32px;letter-spacing:8px;font-weight:bold;padding:18px;background:#f1f5f9;border-radius:12px;text-align:center">${otp}</div><p>This code expires in 5 minutes. Never share it with anyone.</p></div>`,
     });
-    otpStore.set(email, { digest, salt, expiresAt: now + OTP_TTL_MS, sentAt: Date.now(), attempts: 0 });
-    return res.status(200).json({ message: "Verification code sent to the configured email address.", expiresInSeconds: 300 });
-  } catch (error) { next(error); }
+  } catch (error) {
+    // Mail never left: roll back so the user can retry immediately and no dead OTP stays active.
+    if (previous) otpStore.set(email, previous); else otpStore.delete(email);
+    console.error("[site-otp] Could not send OTP email:", error.code || "", error.message);
+    return res.status(503).json({
+      success: false,
+      message:
+        error.code === "SMTP_NOT_CONFIGURED"
+          ? "Email delivery is not configured on the server."
+          : "Could not send the verification email. Please try again in a moment.",
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: "Verification code sent to the configured email address.",
+    email: maskEmail(email),
+    expiresInSeconds: OTP_TTL_MS / 1000,
+    resendAfterSeconds: RESEND_MS / 1000,
+  });
 };
 
 exports.verifyOtp = async (req, res, next) => {
   try {
-    const email = destination().toLowerCase();
+    const email = getSiteOtpEmail();
     const record = otpStore.get(email);
-    const otp = String(req.body?.otp || "").trim();
-    if (!/^\d{6}$/.test(otp)) return res.status(400).json({ message: "Enter the 6-digit OTP." });
-    if (!record || Date.now() > record.expiresAt) { otpStore.delete(email); return res.status(400).json({ message: "OTP expired. Request a new code." }); }
-    if (record.attempts >= MAX_ATTEMPTS) { otpStore.delete(email); return res.status(429).json({ message: "Too many incorrect attempts. Request a new OTP." }); }
-    const digest = crypto.createHash("sha256").update(`${record.salt}:${otp}`).digest("hex");
-    if (digest.length !== record.digest.length || !crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(record.digest))) {
+    const otp = String(req.body?.otp ?? "").trim();
+
+    if (!/^\d{6}$/.test(otp)) return res.status(400).json({ success: false, message: "Enter the 6-digit OTP." });
+    if (!record || Date.now() > record.expiresAt) {
+      otpStore.delete(email);
+      return res.status(400).json({ success: false, message: "OTP expired. Request a new code." });
+    }
+    if (record.locked || record.attempts >= MAX_ATTEMPTS) {
+      return res.status(429).json({ success: false, message: "Too many incorrect attempts. Request a new OTP." });
+    }
+
+    const digest = Buffer.from(hashOtp(record.salt, otp));
+    const expected = Buffer.from(record.digest);
+    if (digest.length !== expected.length || !crypto.timingSafeEqual(digest, expected)) {
       record.attempts += 1;
-      return res.status(400).json({ message: `Incorrect OTP. ${Math.max(0, MAX_ATTEMPTS - record.attempts)} attempts remaining.` });
+      if (record.attempts >= MAX_ATTEMPTS) {
+        record.locked = true; // keep the record so the 60s resend cooldown still applies
+        return res.status(429).json({ success: false, message: "Too many incorrect attempts. Request a new OTP." });
+      }
+      return res.status(400).json({ success: false, message: `Incorrect OTP. ${MAX_ATTEMPTS - record.attempts} attempts remaining.` });
     }
-    otpStore.delete(email);
-    if (!process.env.JWT_SECRET) {
-      const err = new Error("Website verification is not configured. Set JWT_SECRET on the backend.");
-      err.statusCode = 503;
-      throw err;
-    }
-    const token = jwt.sign({ purpose: "site-verification", email }, process.env.JWT_SECRET, { issuer: "auctionpro-api", audience: "auctionpro-client", expiresIn: "30m" });
-    return res.status(200).json({ message: "Website verification successful.", token, expiresInSeconds: 1800 });
-  } catch (error) { next(error); }
+
+    otpStore.delete(email); // single use
+    const minutes = sessionMinutes();
+    const token = jwt.sign({ purpose: "site-verification", email }, process.env.JWT_SECRET, {
+      issuer: "auctionpro-api",
+      audience: "auctionpro-client",
+      expiresIn: `${minutes}m`,
+    });
+    return res.status(200).json({ success: true, message: "Website verification successful.", token, expiresInSeconds: minutes * 60 });
+  } catch (error) {
+    next(error);
+  }
 };

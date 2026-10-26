@@ -3,18 +3,9 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 function attachSocket(server) {
-  const allowedOrigins = new Set([
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://auction-pro-frontend.vercel.app",
-    ...(process.env.CLIENT_URL || "").split(",").map((value) => value.trim()).filter(Boolean),
-  ]);
   const io = new Server(server, {
     cors: {
-      origin(origin, callback) {
-        if (!origin || allowedOrigins.has(origin)) return callback(null, true);
-        return callback(new Error("Socket.IO CORS origin not allowed"));
-      },
+      origin: process.env.CLIENT_URL || "http://localhost:5173",
       methods: ["GET", "POST"],
     },
   });

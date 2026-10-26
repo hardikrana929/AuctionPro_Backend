@@ -26,6 +26,12 @@ const app = express();
 
 app.disable("x-powered-by");
 
+// Behind Render/Railway/Vercel proxies, req.ip must come from X-Forwarded-For,
+// otherwise every visitor shares one rate-limit bucket (and OTP requests get blocked for all).
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", Number(process.env.TRUST_PROXY) || 1);
+}
+
 app.use(helmet());
 
 const allowedOrigins = new Set([
