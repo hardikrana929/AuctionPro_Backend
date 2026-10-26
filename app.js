@@ -19,6 +19,8 @@ const playerRegistrationRoutes = require("./routes/playerRegistrationRoutes");
 const auctionControlRoutes = require("./routes/auctionControlRoutes");
 const feedbackRoutes = require("./routes/feedbackRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
+const siteOtpRoutes = require("./routes/siteOtpRoutes");
+const siteVerification = require("./middleware/siteVerification");
 
 const app = express();
 
@@ -53,7 +55,10 @@ app.get("/", (req, res) => {
   });
 });
 
+app.use("/api/site-otp", siteOtpRoutes);
 app.use("/api/health", healthRoutes);
+// Every application API below this line requires successful site-wide email OTP verification.
+app.use("/api", siteVerification);
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/user/teams", userTeamRoutes);
