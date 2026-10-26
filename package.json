@@ -26,9 +26,9 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.11.1",
     "multer": "^2.4.0",
-    "nodemailer": "^7.0.13",
+    "zod": "^4.6.5",
     "socket.io": "^4.8.1",
-    "zod": "^4.6.5"
+    "nodemailer": "^7.0.10"
   },
   "devDependencies": {
     "nodemon": "^1.14.10"

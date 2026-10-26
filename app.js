@@ -28,11 +28,23 @@ app.disable("x-powered-by");
 
 app.use(helmet());
 
+const allowedOrigins = new Set([
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://auction-pro-frontend.vercel.app",
+  ...(process.env.CLIENT_URL || "").split(",").map((value) => value.trim()).filter(Boolean),
+]);
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    origin(origin, callback) {
+      // Requests without an Origin header are typically server-to-server or CLI requests.
+      if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+      return callback(new Error(`CORS blocked origin: ${origin}`));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Site-Verification"],
+    optionsSuccessStatus: 204,
   })
 );
 

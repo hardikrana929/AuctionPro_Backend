@@ -51,16 +51,9 @@ exports.verifyOtp = async (req, res, next) => {
     const email = destination().toLowerCase();
     const record = otpStore.get(email);
     const otp = String(req.body?.otp || "").trim();
-    if (!/^\d{6}$/.test(otp)) {
-      return res.status(400).json({ message: "Enter the 6-digit OTP." });
-    }
-    if (!record || Date.now() > record.expiresAt) {
-      otpStore.delete(email);
-      return res.status(400).json({ message: "OTP expired. Request a new code." });
-    }
-    if (record.attempts >= MAX_ATTEMPTS) {
-      otpStore.delete(email); return res.status(429).json({ message: "Too many incorrect attempts. Request a new OTP." });
-    }
+    if (!/^\d{6}$/.test(otp)) return res.status(400).json({ message: "Enter the 6-digit OTP." });
+    if (!record || Date.now() > record.expiresAt) { otpStore.delete(email); return res.status(400).json({ message: "OTP expired. Request a new code." }); }
+    if (record.attempts >= MAX_ATTEMPTS) { otpStore.delete(email); return res.status(429).json({ message: "Too many incorrect attempts. Request a new OTP." }); }
     const digest = crypto.createHash("sha256").update(`${record.salt}:${otp}`).digest("hex");
     if (digest.length !== record.digest.length || !crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(record.digest))) {
       record.attempts += 1;
